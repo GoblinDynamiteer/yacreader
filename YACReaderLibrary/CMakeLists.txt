@@ -144,6 +144,8 @@ qt_add_executable(YACReaderLibrary WIN32
     comics_view_transition.cpp
     classic_comics_view.h
     classic_comics_view.cpp
+    comics_table_header.h
+    comics_table_header.cpp
     grid_comics_view.h
     grid_comics_view.cpp
     grid_content_model.h
@@ -381,6 +383,8 @@ set(yacreaderlibrary_qml_files
     ${CMAKE_CURRENT_SOURCE_DIR}/qml/InfoFavorites.qml
     ${CMAKE_CURRENT_SOURCE_DIR}/qml/InfoRating.qml
     ${CMAKE_CURRENT_SOURCE_DIR}/qml/InfoComicsView.qml
+    ${CMAKE_CURRENT_SOURCE_DIR}/qml/InfoComicsFlowView.qml
+    ${CMAKE_CURRENT_SOURCE_DIR}/qml/ComicsDropArea.qml
     ${CMAKE_CURRENT_SOURCE_DIR}/qml/tick.svg
     ${CMAKE_CURRENT_SOURCE_DIR}/qml/reading.svg
     ${CMAKE_CURRENT_SOURCE_DIR}/qml/star.svg
@@ -411,6 +415,8 @@ set(yacreaderlibrary_qml_translation_files
     ${CMAKE_CURRENT_SOURCE_DIR}/qml/InfoFavorites.qml
     ${CMAKE_CURRENT_SOURCE_DIR}/qml/InfoRating.qml
     ${CMAKE_CURRENT_SOURCE_DIR}/qml/InfoComicsView.qml
+    ${CMAKE_CURRENT_SOURCE_DIR}/qml/InfoComicsFlowView.qml
+    ${CMAKE_CURRENT_SOURCE_DIR}/qml/ComicsDropArea.qml
     ${CMAKE_CURRENT_SOURCE_DIR}/qml/ComicInfoView.qml
 )
 set(yacreaderlibrary_theme_files

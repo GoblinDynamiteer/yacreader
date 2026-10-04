@@ -4,23 +4,70 @@
 #include "comic.h"
 #include "comic_files_manager.h"
 #include "comic_model.h"
+#include "comics_table_header.h"
 #include "cover_utils.h"
 #include "yacreader_comic_info_helper.h"
 #include "yacreader_comics_selection_helper.h"
+#include "yacreader_global.h"
+#include "yacreader_global_gui.h"
+#include "yacreader_table_view.h"
 
+#include <QGuiApplication>
+#include <QHeaderView>
 #include <QQmlProperty>
 #include <QQuickItem>
 #include <QQuickView>
+#include <QSettings>
+#include <QSplitter>
 #include <QToolBar>
 #include <QVBoxLayout>
+#include <QtMath>
 
 InfoComicsView::InfoComicsView(QWidget *parent)
-    : ComicsView(parent), toolbar(nullptr), flow(nullptr), list(nullptr)
+    : ComicsView(parent), toolbar(nullptr), flow(nullptr), list(nullptr), updatingFlowFromTable(false)
 {
+    settings = new QSettings(YACReader::getSettingsPath() + "/YACReaderLibrary.ini", QSettings::IniFormat, this);
+    settings->beginGroup("libraryConfig");
 
     // container->setFocusPolicy(Qt::StrongFocus);
 
     QQmlContext *ctxt = view->rootContext();
+
+    // The flow and the info panel are in different native windows, widgets can't be placed on
+    // top of them. Both views share the QML engine, so they also share the context properties.
+    flowView = new QQuickView(view->engine(), nullptr);
+    flowView->setResizeMode(QQuickView::SizeRootObjectToView);
+    connect(flowView, &QQuickView::statusChanged, this, [this](QQuickView::Status status) {
+        if (status == QQuickView::Error)
+            QLOG_ERROR() << flowView->errors();
+    });
+    flowContainer = QWidget::createWindowContainer(flowView);
+    flowContainer->setFocusPolicy(Qt::StrongFocus);
+    flowView->installEventFilter(this);
+
+    tableView = new YACReaderTableView;
+    tableView->verticalHeader()->hide();
+    tableView->setFocusPolicy(Qt::StrongFocus);
+    tableView->setContextMenuPolicy(Qt::CustomContextMenu);
+    tableView->horizontalHeader()->setContextMenuPolicy(Qt::CustomContextMenu);
+
+    infoSplitter = new QSplitter(Qt::Horizontal);
+    infoSplitter->addWidget(container);
+    infoSplitter->addWidget(tableView);
+    // The info panel keeps its width when the window is resized
+    infoSplitter->setStretchFactor(0, 0);
+    infoSplitter->setStretchFactor(1, 1);
+    useDefaultInfoSplitterSizes = !infoSplitter->restoreState(settings->value(INFO_COMICS_VIEW_SPLITTER_STATUS).toByteArray());
+
+    // The covers are sized to the height of the flow
+    flowContainer->setMinimumHeight(120);
+    flowSplitter = new QSplitter(Qt::Vertical);
+    flowSplitter->addWidget(flowContainer);
+    flowSplitter->addWidget(infoSplitter);
+    flowSplitter->setChildrenCollapsible(false);
+    // The flow keeps its height when the window is resized
+    flowSplitter->setStretchFactor(0, 0);
+    flowSplitter->setStretchFactor(1, 1);
 
     // Apply theme colors
     initTheme(this);
@@ -28,13 +75,34 @@ InfoComicsView::InfoComicsView(QWidget *parent)
     ctxt->setContextProperty("backgroundImage", QUrl());
     ctxt->setContextProperty("comicsList", new ComicModel());
 
+    flowView->setSource(QUrl("qrc:/qml/InfoComicsFlowView.qml"));
     view->setSource(QUrl("qrc:/qml/InfoComicsView.qml"));
+
+    if (!flowSplitter->restoreState(settings->value(INFO_COMICS_VIEW_FLOW_SPLITTER_STATUS).toByteArray())) {
+        const int flowHeight = flowView->rootObject() != nullptr ? qCeil(flowView->rootObject()->implicitHeight()) : 267;
+        flowSplitter->setSizes({ flowHeight, 1 });
+    }
 
     selectionHelper = new YACReaderComicsSelectionHelper(this);
     comicInfoHelper = new YACReaderComicInfoHelper(this);
 
+    connect(tableView, &QAbstractItemView::doubleClicked, this, [this](const QModelIndex &index) { selectedItem(index.row()); });
+    connect(tableView, &YACReaderTableView::comicRated, this, &ComicsView::comicRated);
+    connect(tableView, &YACReaderTableView::customCoverDropped, this, [this](const QString &imagePath, const QModelIndex &index) {
+        emit customComicCoverRequested(index.data(ComicModel::IdRole).toULongLong(), imagePath);
+    });
+    connect(tableView, &QWidget::customContextMenuRequested, this, &InfoComicsView::requestedTableContextMenu);
+    connect(tableView->horizontalHeader(), &QWidget::customContextMenuRequested, this, &InfoComicsView::requestedHeaderContextMenu);
+    connect(tableView->horizontalHeader(), &QHeaderView::sectionMoved, this, &InfoComicsView::saveTableHeadersStatus);
+    connect(tableView->horizontalHeader(), &QHeaderView::sectionResized, this, &InfoComicsView::saveTableHeadersStatus);
+    connect(infoSplitter, &QSplitter::splitterMoved, this, [this] {
+        useDefaultInfoSplitterSizes = false;
+        saveSplitterStatus();
+    });
+    connect(flowSplitter, &QSplitter::splitterMoved, this, &InfoComicsView::saveSplitterStatus);
+
     auto l = new QVBoxLayout;
-    l->addWidget(container);
+    l->addWidget(flowSplitter);
     this->setLayout(l);
 
     setContentsMargins(0, 0, 0, 0);
@@ -48,17 +116,49 @@ InfoComicsView::InfoComicsView(QWidget *parent)
 
 InfoComicsView::~InfoComicsView()
 {
+    // The flow view uses the engine owned by view
+    delete flowView;
     delete view;
+}
+
+bool InfoComicsView::eventFilter(QObject *watched, QEvent *event)
+{
+    // Same as ComicsView::eventFilter, for the flow
+    if (watched == flowView && event->type() == QEvent::MouseButtonPress) {
+        if (!flowContainer->hasFocus())
+            flowContainer->setFocus(Qt::MouseFocusReason);
+        else if (QGuiApplication::focusWindow() != flowView)
+            flowView->requestActivate();
+    }
+
+    return ComicsView::eventFilter(watched, event);
+}
+
+void InfoComicsView::resizeEvent(QResizeEvent *event)
+{
+    ComicsView::resizeEvent(event);
+
+    // Until the splitter is moved, the info panel gets 40% of the width and the table the rest
+    if (useDefaultInfoSplitterSizes) {
+        const int infoWidth = width() * 2 / 5;
+        infoSplitter->setSizes({ infoWidth, width() - infoWidth });
+    }
 }
 
 void InfoComicsView::setToolBar(QToolBar *toolBar)
 {
-    static_cast<QVBoxLayout *>(this->layout())->insertWidget(1, toolBar);
+    static_cast<QVBoxLayout *>(this->layout())->addWidget(toolBar);
     toolbar = toolBar;
 }
 
 void InfoComicsView::releaseToolBar()
 {
+}
+
+void InfoComicsView::saveViewConfig()
+{
+    saveTableHeadersStatus();
+    saveSplitterStatus();
 }
 
 void InfoComicsView::setModel(ComicModel *model)
@@ -70,6 +170,22 @@ void InfoComicsView::setModel(ComicModel *model)
     comicInfoHelper->setModel(model);
 
     ComicsView::setModel(model);
+
+    tableView->horizontalHeader()->blockSignals(true);
+
+    tableView->setModel(model);
+    // The table shares the selection with the flow, setModel() gives it a new selection model
+    auto tableSelectionModel = tableView->selectionModel();
+    tableView->setSelectionModel(selectionHelper->selectionModel());
+    delete tableSelectionModel;
+    connect(selectionHelper->selectionModel(), &QItemSelectionModel::currentChanged, this, &InfoComicsView::updateFlowFromTable);
+
+    auto headersState = settings->value(INFO_COMICS_VIEW_HEADERS).toByteArray();
+    if (headersState.isEmpty()) // start with the columns of the classic view
+        headersState = settings->value(COMICS_VIEW_HEADERS).toByteArray();
+    YACReader::setupComicsTableHeader(tableView, headersState);
+
+    tableView->horizontalHeader()->blockSignals(false);
 
     QQmlContext *ctxt = view->rootContext();
 
@@ -105,7 +221,7 @@ void InfoComicsView::setModel(ComicModel *model)
         list->disconnect();
     }
 
-    if (auto *rootObject = view->rootObject()) {
+    if (auto *rootObject = flowView->rootObject()) {
         flow = rootObject->findChild<QQuickItem *>("flow", Qt::FindChildrenRecursively);
         list = rootObject->findChild<QQuickItem *>("list", Qt::FindChildrenRecursively);
     }
@@ -128,8 +244,18 @@ void InfoComicsView::setCurrentIndex(const QModelIndex &index)
 
 void InfoComicsView::setCurrentIndex(int index)
 {
+    // The table already selected the comics (there can be more than one)
+    if (updatingFlowFromTable)
+        return;
+
     selectionHelper->clear();
     selectionHelper->selectIndex(index);
+
+    if (model != nullptr && index >= 0 && index < model->rowCount()) {
+        const auto modelIndex = model->index(index, 0);
+        selectionHelper->selectionModel()->setCurrentIndex(modelIndex, QItemSelectionModel::NoUpdate);
+        tableView->scrollTo(modelIndex);
+    }
 }
 
 QModelIndex InfoComicsView::currentIndex()
@@ -144,8 +270,7 @@ QItemSelectionModel *InfoComicsView::selectionModel()
 
 void InfoComicsView::scrollTo(const QModelIndex &mi, QAbstractItemView::ScrollHint hint)
 {
-    Q_UNUSED(mi);
-    Q_UNUSED(hint);
+    tableView->scrollTo(mi, hint);
 }
 
 ContentViewState InfoComicsView::captureViewState() const
@@ -176,6 +301,8 @@ void InfoComicsView::restoreViewState(const ContentViewState &state)
     selectionHelper->selectIndex(index.row());
     if (list)
         QMetaObject::invokeMethod(list, "restoreCurrentIndex", Q_ARG(QVariant, index.row()));
+    selectionHelper->selectionModel()->setCurrentIndex(index, QItemSelectionModel::NoUpdate);
+    tableView->scrollTo(index, QAbstractItemView::PositionAtCenter);
 }
 
 void InfoComicsView::toFullScreen()
@@ -209,7 +336,7 @@ void InfoComicsView::updateCurrentComicView()
 
 void InfoComicsView::focusComicsNavigation(Qt::FocusReason reason)
 {
-    container->setFocus(reason);
+    flowContainer->setFocus(reason);
 }
 
 void InfoComicsView::setShowMarks(bool show)
@@ -270,10 +397,51 @@ void InfoComicsView::selectedItem(int index)
     emit selected(index);
 }
 
+void InfoComicsView::updateFlowFromTable(const QModelIndex &current)
+{
+    if (!current.isValid() || list == nullptr)
+        return;
+
+    // The flow notifies the change with currentCoverChanged, which also updates the info panel
+    updatingFlowFromTable = true;
+    QQmlProperty(list, "currentIndex").write(current.row());
+    updatingFlowFromTable = false;
+}
+
+void InfoComicsView::saveTableHeadersStatus()
+{
+    if (model == nullptr || model->rowCount() == 0)
+        return;
+
+    settings->setValue(INFO_COMICS_VIEW_HEADERS, tableView->horizontalHeader()->saveState());
+}
+
+void InfoComicsView::saveSplitterStatus()
+{
+    settings->setValue(INFO_COMICS_VIEW_FLOW_SPLITTER_STATUS, flowSplitter->saveState());
+
+    // Until it is moved, the info splitter keeps its default proportions
+    if (!useDefaultInfoSplitterSizes)
+        settings->setValue(INFO_COMICS_VIEW_SPLITTER_STATUS, infoSplitter->saveState());
+}
+
+void InfoComicsView::requestedTableContextMenu(const QPoint &point)
+{
+    emit customContextMenuItemRequested(tableView->mapTo(this, point));
+}
+
+void InfoComicsView::requestedHeaderContextMenu(const QPoint &point)
+{
+    YACReader::execComicsTableHeaderMenu(tableView, tableView->horizontalHeader()->mapToGlobal(point), [this] { saveTableHeadersStatus(); });
+}
+
 void InfoComicsView::applyTheme(const Theme &theme)
 {
     QQmlContext *ctxt = view->rootContext();
     const auto &giv = theme.gridAndInfoView;
+
+    flowSplitter->setStyleSheet(theme.contentSplitter.verticalSplitterQSS);
+    infoSplitter->setStyleSheet(theme.contentSplitter.horizontalSplitterQSS);
 
     // Info panel colors
     // Cache-bust the SVG file URLs so QML's image cache doesn't serve stale

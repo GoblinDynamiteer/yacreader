@@ -7,9 +7,12 @@
 #include <QQmlContext>
 
 class QQuickView;
+class QSettings;
+class QSplitter;
 
 class YACReaderComicsSelectionHelper;
 class YACReaderComicInfoHelper;
+class YACReaderTableView;
 
 class InfoComicsView : public ComicsView, protected Themable
 {
@@ -19,9 +22,12 @@ public:
 
 protected:
     void applyTheme(const Theme &theme) override;
+    bool eventFilter(QObject *watched, QEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
     ~InfoComicsView() override;
     void setToolBar(QToolBar *toolBar) override;
     void releaseToolBar() override;
+    void saveViewConfig() override;
     void setModel(ComicModel *model) override;
     void setCurrentIndex(const QModelIndex &index) override;
     QModelIndex currentIndex() override;
@@ -53,10 +59,26 @@ protected slots:
 
     void selectedItem(int index);
 
+    void updateFlowFromTable(const QModelIndex &current);
+    void saveTableHeadersStatus();
+    void saveSplitterStatus();
+    void requestedTableContextMenu(const QPoint &point);
+    void requestedHeaderContextMenu(const QPoint &point);
+
 protected:
     QToolBar *toolbar;
     QObject *flow;
     QObject *list;
+
+    // The flow has its own QQuickView, so the table can be placed next to the info panel
+    QQuickView *flowView;
+    QWidget *flowContainer;
+    QSplitter *flowSplitter;
+    QSplitter *infoSplitter;
+    YACReaderTableView *tableView;
+    QSettings *settings;
+    bool updatingFlowFromTable;
+    bool useDefaultInfoSplitterSizes;
 
     YACReaderComicsSelectionHelper *selectionHelper;
     YACReaderComicInfoHelper *comicInfoHelper;

@@ -15,49 +15,9 @@ Rectangle {
     //height: parent.height
     anchors.margins: 0
 
-    FlowView {
-        id: flow
-        objectName: "flow"
-        height: 256 //TODO dynamic size?
-
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.right: parent.right
-
-        additionalBottomSpace: indicator.height
-    }
-
-    Image {
-        id: top_shadow
-        source: topShadow
-        width: parent.width
-        fillMode: Image.TileHorizontally
-    }
-
-    Rectangle {
-        id: indicator_container
-        width: parent.width
-        y: 250
-
-        Image {
-            id: indicator
-            source: infoIndicator
-        }
-
-        Image {
-            id: bottom_shadow
-            x: indicator.width
-            width: parent.width - indicator.width
-            source: infoShadow
-            fillMode: Image.TileHorizontally
-        }
-    }
-
     Rectangle {
         id: info_container
-        width: parent.width
-        y: flow.height + flow.additionalBottomSpace - 6
-        height: parent.height - y
+        anchors.fill: parent
 
         clip: true
 
@@ -107,31 +67,7 @@ Rectangle {
         }
     }
 
-    DropArea {
+    ComicsDropArea {
         anchors.fill: parent
-
-        onEntered: {
-            if(drag.hasUrls)
-            {
-                if(dropManager.canDropImage(drag.urls)
-                        || dropManager.canDropUrls(drag.urls, drag.action))
-                {
-                    drag.accepted = true;
-                }else
-                    drag.accepted = false;
-            }
-        }
-
-        onDropped: {
-            if(drop.hasUrls && dropManager.canDropImage(drop.urls))
-            {
-                dropManager.droppedImage(drop.urls);
-                drop.accepted = true;
-            }
-            else if(drop.hasUrls && dropManager.canDropUrls(drop.urls, drop.action))
-            {
-                dropManager.droppedFiles(drop.urls, drop.action);
-            }
-        }
     }
 }

@@ -1,6 +1,7 @@
 #include "classic_comics_view.h"
 
 #include "comic_flow_widget.h"
+#include "comics_table_header.h"
 #include "shortcuts_manager.h"
 #include "yacreader_global.h"
 #include "yacreader_table_view.h"
@@ -8,7 +9,6 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
-#include <QMenu>
 #include <QScrollBar>
 #include <QSettings>
 #include <QSplitter>
@@ -193,51 +193,7 @@ void ClassicComicsView::setModel(ComicModel *model)
         comicFlow->setImagePaths(paths);
         comicFlow->setMarks(model->getReadList());
 
-        bool loadDefaults = true;
-        if (settings->contains(COMICS_VIEW_HEADERS)) {
-            try {
-                loadDefaults = !tableView->horizontalHeader()->restoreState(settings->value(COMICS_VIEW_HEADERS).toByteArray());
-            } catch (...) {
-            }
-        }
-
-        if (loadDefaults) {
-            // default columns and order
-            for (int i = 0; i < tableView->horizontalHeader()->count(); i++)
-                tableView->horizontalHeader()->hideSection(i);
-
-            tableView->horizontalHeader()->showSection(ComicModel::Number);
-            tableView->horizontalHeader()->showSection(ComicModel::Title);
-            tableView->horizontalHeader()->showSection(ComicModel::FileName);
-            tableView->horizontalHeader()->showSection(ComicModel::NumPages);
-            tableView->horizontalHeader()->showSection(ComicModel::Size);
-            tableView->horizontalHeader()->showSection(ComicModel::ReadColumn);
-            tableView->horizontalHeader()->showSection(ComicModel::CurrentPage);
-            tableView->horizontalHeader()->showSection(ComicModel::PublicationDate);
-            tableView->horizontalHeader()->showSection(ComicModel::Rating);
-
-            tableView->horizontalHeader()->moveSection(ComicModel::CurrentPage, 3);
-            tableView->horizontalHeader()->moveSection(ComicModel::Rating, 12);
-            tableView->horizontalHeader()->moveSection(ComicModel::Size, 5);
-        }
-
-        // make sure that columns without title are hidden
-        for (int i = 0; i < tableView->horizontalHeader()->count(); i++) {
-            auto title = tableView->model()->headerData(i, Qt::Horizontal).toString();
-            if (title.isEmpty()) {
-                tableView->horizontalHeader()->hideSection(i);
-            }
-        }
-
-        tableView->horizontalHeader()->setDefaultAlignment(Qt::AlignLeft);
-        tableView->horizontalHeader()->setSectionsMovable(true);
-        tableView->horizontalHeader()->setStretchLastSection(true);
-
-        for (int i = 0; i < tableView->horizontalHeader()->count() - 1; i++) {
-            if (!tableView->horizontalHeader()->isSectionHidden(i)) {
-                tableView->resizeColumnToContents(i);
-            }
-        }
+        YACReader::setupComicsTableHeader(tableView, settings->value(COMICS_VIEW_HEADERS).toByteArray());
 
         tableView->horizontalHeader()->blockSignals(false);
     }
@@ -393,23 +349,7 @@ void ClassicComicsView::requestedItemContextMenu(const QPoint &point)
 
 void ClassicComicsView::requestedHeaderContextMenu(const QPoint &point)
 {
-    QMenu menu;
-
-    for (int i = 0; i < tableView->model()->columnCount(); ++i) {
-        auto title = tableView->model()->headerData(i, Qt::Horizontal).toString();
-
-        if (!title.isEmpty()) {
-            auto action = menu.addAction(tableView->model()->headerData(i, Qt::Horizontal).toString());
-            action->setCheckable(true);
-            action->setChecked(!tableView->isColumnHidden(i));
-            connect(action, &QAction::toggled, tableView, [this, i](bool checked) {
-                tableView->horizontalHeader()->setSectionHidden(i, !checked);
-            });
-            connect(action, &QAction::toggled, this, &ClassicComicsView::saveTableHeadersStatus);
-        }
-    }
-
-    menu.exec(this->tableView->horizontalHeader()->mapToGlobal(point));
+    YACReader::execComicsTableHeaderMenu(tableView, tableView->horizontalHeader()->mapToGlobal(point), [this] { saveTableHeadersStatus(); });
 }
 
 void ClassicComicsView::setShowMarks(bool show)
